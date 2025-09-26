@@ -5,63 +5,79 @@ const User = require('../models/User');
 
 const router = express.Router();
 
-// Register
-router.post('/register', async (req, res) => {
-  try {
-    const { username, email, password } = req.body;
+// ------------------- Register -------------------
+router.post('/register', async(req, res) => {
+    try {
+        const { username, email, password } = req.body;
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+        // Kiểm tra email đã tồn tại chưa
+        const existUser = await User.findOne({ email });
+        if (existUser) return res.status(400).json({ error: 'Email already registered' });
 
-    const newUser = new User({ username, email, password: hashedPassword });
-    await newUser.save();
+        // Hash password
+        const hashedPassword = await bcrypt.hash(password, 10);
 
-    res.json({ message: 'User registered successfully!' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+        const newUser = new User({ username, email, password: hashedPassword });
+        await newUser.save();
+
+        res.json({ message: 'User registered successfully!' });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Login
-router.post('/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
+// ------------------- Login -------------------
+router.post('/login', async(req, res) => {
+    try {
+        const { email, password } = req.body;
 
-    // Find user
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ error: 'User not found' });
+        const user = await User.findOne({ email });
+        if (!user) return res.status(400).json({ error: 'User not found' });
 
-    // Compare password
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
+        const isMatch = await bcrypt.compare(password, user.password);
+        if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
 
-    // Generate token
-    const token = jwt.sign({ id: user._id }, 'secretKey', { expiresIn: '1h' });
+        // Tạo token hết hạn 30s
+        const token = jwt.sign({ id: user._id }, 'secretKey', { expiresIn: '5s' });
 
-    res.json({ token });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+        // In ra thời gian hết hạn token
+        const decoded = jwt.decode(token, { complete: true });
+        console.log('Token expires at:', new Date(decoded.payload.exp * 1000));
+
+        res.json({ token });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
-// Middleware to verify token
+// ------------------- Middleware xác thực token -------------------
 function authMiddleware(req, res, next) {
-  const token = req.header('Authorization')?.replace('Bearer ', '');
-  if (!token) return res.status(401).json({ error: 'Access denied' });
+    const authHeader = req.header('Authorization');
+    if (!authHeader) return res.status(401).json({ error: 'Access denied' });
 
-  try {
-    const verified = jwt.verify(token, 'secretKey');
-    req.user = verified;
-    next();
-  } catch {
-    res.status(400).json({ error: 'Invalid token' });
-  }
+    const token = authHeader.replace('Bearer ', '');
+
+    try {
+        const verified = jwt.verify(token, 'secretKey');
+        req.user = verified;
+        next();
+    } catch (err) {
+        if (err.name === 'TokenExpiredError') {
+            return res.status(401).json({ error: 'Token expired' });
+        }
+        res.status(400).json({ error: 'Invalid token' });
+    }
 }
 
-// Protected route
-router.get('/profile', authMiddleware, async (req, res) => {
-  const user = await User.findById(req.user.id).select('-password');
-  res.json(user);
+// ------------------- Protected route -------------------
+router.get('/profile', authMiddleware, async(req, res) => {
+    try {
+        const user = await User.findById(req.user.id).select('-password');
+        if (!user) return res.status(404).json({ error: 'User not found' });
+        res.json(user);
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 module.exports = router;
